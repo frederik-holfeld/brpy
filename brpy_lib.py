@@ -35,9 +35,11 @@ class UploadRequest(SessionRequest):
         self.size = size
 
 class RenderRequest(SessionRequest):
-    def __init__(self, session, frames):
+    def __init__(self, session, frames, render_format):
         super().__init__('RENDER', session)
         self.frames = frames
+        if render_format != None:
+            self.render_format = render_format
 
 
 class OkayResponse:
@@ -50,6 +52,7 @@ class FailResponse:
         self.error = error
 
 class RenderOkayResponse(OkayResponse):
-    def __init__(self, frame_size):
+    def __init__(self, frame_size, file_extension):
         super().__init__()
         self.frame_size = frame_size
+        self.file_extension = file_extension

@@ -42,13 +42,40 @@ def handle_requests(connection):
                 case 'RENDER':
                     frame = request_header['frames']
 
-                    subprocess.run((blender, '-b', f"{work_dir}/{session}.blend", '-o', session, '-F', 'PNG', '-x', '0', '-f', str(frame), *options))
-                    with open(f"{session}{frame:04d}", 'rb') as file:
-                        image = file.read()
-                    os.remove(f"{session}{frame:04d}")
 
-                    response_header = json.dumps(RenderOkayResponse(len(image)).__dict__).encode()
-                    response = image
+                    args = [blender, '-b', f"{work_dir}/{session}.blend", '-o', session]
+                    try:
+                        args += '-F', request_header['render_format']
+                    except KeyError:
+                        pass
+                    args += '-x', '1', '-f', str(frame), *options
+
+
+                    subprocess.run(args)
+
+
+                    # The working directory is assumed to be empty when starting the server.
+                    # Therefore the correct file should always be found,
+                    # unless when rendering the same session multiple times with different render formats concurrently,
+                    # which isn't guaranteed to work at the moment.
+                    image = None
+                    with os.scandir() as files:
+                        for file in files:
+                            if file.name.startswith(f"{session}{frame:04d}.") and file.name != f"{session}.blend":
+                                image = file
+
+                    with open(image, 'rb') as file:
+                        image_data = file.read()
+                    os.remove(image)
+
+
+                    response_header = json.dumps(
+                        RenderOkayResponse(
+                            len(image_data),
+                            image.name.split('.')[-1]
+                        ).__dict__
+                    ).encode()
+                    response = image_data
 
                 case 'DELETE':
                     try:

@@ -76,7 +76,7 @@ def send_requests(server):
 
                     # Send RENDER-request.
                     print(f"{server_prefix} Sending request to render frame {frame}.")
-                    request_header = json.dumps(RenderRequest(args.session, frame).__dict__).encode()
+                    request_header = json.dumps(RenderRequest(args.session, frame, args.render_format).__dict__).encode()
                     render_start = time.time()
                     connection.sendall(len(request_header).to_bytes(8))
                     connection.sendall(request_header)
@@ -85,12 +85,23 @@ def send_requests(server):
                     # Receive rendered frame.
                     response_header_size = int.from_bytes(receive_bytes(connection, 8, server_prefix))
                     response_header = json.loads(receive_bytes(connection, response_header_size, server_prefix))
-                    image = receive_bytes(connection, response_header['frame_size'], server_prefix)
+                    image_data = receive_bytes(connection, response_header['frame_size'], server_prefix)
                     render_end = time.time()
                     print(f"{server_prefix} Received frame {frame} after {render_end - render_start:.3f} seconds.")
 
-                    with open(f"{frame:04d}.png", 'wb') as file:
-                        file.write(image)
+
+                    try:
+                        file_extension = response_header['file_extension']
+                    except KeyError:
+                        file_extension = ''
+
+                    image = f"{frame:04d}"
+                    if file_extension.isalnum():
+                        image = f"{image}.{file_extension}"
+
+                    with open(image, 'wb') as file:
+                        file.write(image_data)
+                    print(f"{server_prefix} Frame {frame} has been saved as '{image}'.")
 
 
                     # Increment the global counter of rendered frames and time the duration of rendering all frames if the last frame has just been rendered.
@@ -183,7 +194,9 @@ parser_upload.add_argument(
     'blend_file',
     metavar='blend-file',
     help="""the .blend file to be stored on the server(s)
-make sure all resources necessary for rendering are packed into the file\n\n"""
+make sure all resources necessary for rendering are packed into the file
+
+set an image format for render output unless rendering with the '-F' option\n\n"""
 )
 
 
@@ -218,6 +231,22 @@ parser_render.add_argument(
     nargs='?',
     help="""last frame of rendered frame range
 if omitted, only start-frame is rendered\n\n"""
+)
+
+parser_render.add_argument(
+    '-F',
+    metavar='render-format',
+    dest='render_format',
+    help="""the format rendered frames are encoded in
+takes the same values as the '-F' / '--render-format' option for Blender does
+
+the use of PNGs is highly discouraged:
+    it is likely to severely slow down rendering with high compression levels
+    when using low compression levels, a main advantage of PNG is lost
+
+consider using a fast encoding format like 'OPEN_EXR' to maximize throughput
+OpenEXR export is incredibly fast while being suitable for post-production
+optional lossy compression can also reduce file sizes massively\n\n"""
 )
 
 
