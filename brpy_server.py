@@ -5,7 +5,63 @@ import subprocess
 import sys
 import threading
 
-from brpy_lib import receive_bytes, OkayResponse, FailResponse, RenderOkayResponse
+from brpy_lib import receive_bytes, OkayResponse, FailResponse, RenderRequestResponse, RenderFrameResponse
+
+
+def render_frame(connection, session, request_header, send_lock):
+    frame = request_header['frames']
+
+
+    args = [blender, '-b', f"{work_dir}/{session}.blend", '-o', session]
+    try:
+        args += '-F', request_header['render_format']
+    except KeyError:
+        pass
+    args += '-x', '1', '-f', str(frame), *options
+
+
+    subprocess.run(args)
+
+
+    with send_lock:
+        response_header = json.dumps(RenderRequestResponse(1).__dict__).encode()
+        connection.sendall(len(response_header).to_bytes(8))
+        connection.sendall(response_header)
+
+
+    # The working directory is assumed to be empty when starting the server.
+    # Therefore the correct file should always be found,
+    # unless when rendering the same session multiple times with different render formats concurrently,
+    # which isn't guaranteed to work at the moment.
+    with os.scandir() as files:
+        for file in files:
+            if file.name.startswith(f"{session}{frame:04d}.") and file.name != f"{session}.blend":
+                image = file
+
+    try:
+        with open(image, 'rb') as file:
+            image_data = file.read()
+    except UnboundLocalError:
+        print("Could not find saved frame, something must have gone wrong with the render. Exiting.")
+        sys.exit()
+
+    os.remove(image)
+
+
+    response_header = json.dumps(
+        RenderFrameResponse(
+            len(image_data),
+            frame,
+            image.name.split('.')[-1]
+        ).__dict__
+    ).encode()
+    response = image_data
+
+
+    with send_lock:
+        connection.sendall(len(response_header).to_bytes(8))
+        connection.sendall(response_header)
+        connection.sendall(response)
 
 
 def handle_requests(connection):
@@ -13,6 +69,10 @@ def handle_requests(connection):
     # Used to distinguish requests from different clients.
     client_name = connection.getpeername()
     client_prefix = f"[{client_name[0]}:{client_name[1]}]"
+
+
+    # As multiple threads may try to send data to a client simultaneously, that needs to be guarded by a lock.
+    send_lock = threading.Lock()
 
 
     with connection:
@@ -40,42 +100,8 @@ def handle_requests(connection):
                     response_header = json.dumps(OkayResponse().__dict__).encode()
 
                 case 'RENDER':
-                    frame = request_header['frames']
-
-
-                    args = [blender, '-b', f"{work_dir}/{session}.blend", '-o', session]
-                    try:
-                        args += '-F', request_header['render_format']
-                    except KeyError:
-                        pass
-                    args += '-x', '1', '-f', str(frame), *options
-
-
-                    subprocess.run(args)
-
-
-                    # The working directory is assumed to be empty when starting the server.
-                    # Therefore the correct file should always be found,
-                    # unless when rendering the same session multiple times with different render formats concurrently,
-                    # which isn't guaranteed to work at the moment.
-                    image = None
-                    with os.scandir() as files:
-                        for file in files:
-                            if file.name.startswith(f"{session}{frame:04d}.") and file.name != f"{session}.blend":
-                                image = file
-
-                    with open(image, 'rb') as file:
-                        image_data = file.read()
-                    os.remove(image)
-
-
-                    response_header = json.dumps(
-                        RenderOkayResponse(
-                            len(image_data),
-                            image.name.split('.')[-1]
-                        ).__dict__
-                    ).encode()
-                    response = image_data
+                    threading.Thread(target=render_frame, args=(connection, session, request_header, send_lock)).start()
+                    continue
 
                 case 'DELETE':
                     try:

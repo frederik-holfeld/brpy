@@ -9,6 +9,24 @@ import time
 from brpy_lib import receive_bytes, SessionRequest, RenderRequest, UploadRequest
 
 
+def request_frame(connection, awaited_frames, server_prefix):
+    try:
+        frame = frames.pop(0)    # Operations on lists are apparently thread safe in Python, so no lock is needed here.
+    except IndexError:
+        sys.exit()
+
+
+    # Send RENDER-request.
+    print(f"{server_prefix} Sending request to render frame {frame}.")
+    request_header = json.dumps(RenderRequest(args.session, frame, args.render_format).__dict__).encode()
+    render_start = time.time()
+    connection.sendall(len(request_header).to_bytes(8))
+    connection.sendall(request_header)
+
+
+    awaited_frames[frame] = render_start
+
+
 def send_requests(server):
     server_prefix = f"[{server[0]}:{server[1]}]"    # Indicates which server an output is associated with.
 
@@ -63,54 +81,56 @@ def send_requests(server):
                 global global_render_end
 
                 frames_rendered = 0
+                awaited_frames = {}
+
+
+                # Initial render request, causing subsequent render request responses by the server.
+                request_frame(connection, awaited_frames, server_prefix)
 
 
                 # Start loop to render frames.
-                while True:
-                    try:
-                        frame = frames.pop(0)    # Operations on lists are apparently thread safe in Python, so no lock is needed here.
-                    except IndexError:
-                        print(f"{server_prefix} Rendered {frames_rendered} frame(s) in total, {frames_rendered / frames_count:.2%} of all frames.")
-                        sys.exit()
+                while len(awaited_frames) > 0:
 
-
-                    # Send RENDER-request.
-                    print(f"{server_prefix} Sending request to render frame {frame}.")
-                    request_header = json.dumps(RenderRequest(args.session, frame, args.render_format).__dict__).encode()
-                    render_start = time.time()
-                    connection.sendall(len(request_header).to_bytes(8))
-                    connection.sendall(request_header)
-
-
-                    # Receive rendered frame.
+                    # Receive request to render more frames or a rendered frame.
                     response_header_size = int.from_bytes(receive_bytes(connection, 8, server_prefix))
                     response_header = json.loads(receive_bytes(connection, response_header_size, server_prefix))
-                    image_data = receive_bytes(connection, response_header['frame_size'], server_prefix)
-                    render_end = time.time()
-                    print(f"{server_prefix} Received frame {frame} after {render_end - render_start:.3f} seconds.")
+
+                    match response_header['type']:
+                        case 'REQUEST':
+                            threading.Thread(target=request_frame, args=(connection, awaited_frames, server_prefix)).start()
+                        case 'FRAME':
+                            frame = response_header['frame_number']
+                            image_data = receive_bytes(connection, response_header['frame_size'], server_prefix)
+                            render_end = time.time()
+                            print(f"{server_prefix} Received frame {frame} after {render_end - awaited_frames[frame]:.3f} seconds.")
 
 
-                    try:
-                        file_extension = response_header['file_extension']
-                    except KeyError:
-                        file_extension = ''
+                            try:
+                                file_extension = response_header['file_extension']
+                            except KeyError:
+                                file_extension = ''
 
-                    image = f"{frame:04d}"
-                    if file_extension.isalnum():
-                        image = f"{image}.{file_extension}"
+                            image = f"{frame:04d}"
+                            if file_extension.isalnum():
+                                image = f"{image}.{file_extension}"
 
-                    with open(image, 'wb') as file:
-                        file.write(image_data)
-                    print(f"{server_prefix} Frame {frame} has been saved as '{image}'.")
+                            with open(image, 'wb') as file:
+                                file.write(image_data)
+                            print(f"{server_prefix} Frame {frame} has been saved as '{image}'.")
 
 
-                    # Increment the global counter of rendered frames and time the duration of rendering all frames if the last frame has just been rendered.
-                    with global_frames_rendered_lock:
-                        global_frames_rendered += 1
-                    if global_frames_rendered == frames_count:
-                        global_render_end = time.time()
+                            # Increment the global counter of rendered frames and time the duration of rendering all frames if the last frame has just been rendered.
+                            with global_frames_rendered_lock:
+                                global_frames_rendered += 1
+                            if global_frames_rendered == frames_count:
+                                global_render_end = time.time()
 
-                    frames_rendered += 1
+
+                            frames_rendered += 1
+                            del awaited_frames[frame]
+
+
+                print(f"{server_prefix} Rendered {frames_rendered} frame(s) in total, {frames_rendered / frames_count:.2%} of all frames.")
 
             case 'DELETE':
 

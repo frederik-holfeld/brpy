@@ -51,8 +51,19 @@ class FailResponse:
         self.status = 'FAIL'
         self.error = error
 
-class RenderOkayResponse(OkayResponse):
-    def __init__(self, frame_size, file_extension):
-        super().__init__()
+
+class RenderResponse:
+    def __init__(self, type):
+        self.type = type
+
+class RenderRequestResponse(RenderResponse):
+    def __init__(self, frame_count):
+        super().__init__('REQUEST')
+        self.frame_count = frame_count
+
+class RenderFrameResponse(RenderResponse):
+    def __init__(self, frame_size, frame_number, file_extension):
+        super().__init__('FRAME')
         self.frame_size = frame_size
+        self.frame_number = frame_number
         self.file_extension = file_extension
