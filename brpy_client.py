@@ -9,16 +9,10 @@ import time
 from brpy_lib import receive_bytes, SessionRequest, RenderRequest, UploadRequest
 
 
-def request_frame(connection, awaited_frames, server_prefix):
-    try:
-        frame = frames.pop(0)    # Operations on lists are apparently thread safe in Python, so no lock is needed here.
-    except IndexError:
-        sys.exit()
-
-
-    # Send RENDER-request.
+def request_frame(connection, frame, awaited_frames, server_prefix):
     print(f"{server_prefix} Sending request to render frame {frame}.")
     request_header = json.dumps(RenderRequest(args.session, frame, args.render_format).__dict__).encode()
+
     render_start = time.time()
     connection.sendall(len(request_header).to_bytes(8))
     connection.sendall(request_header)
@@ -85,7 +79,12 @@ def send_requests(server):
 
 
                 # Initial render request, causing subsequent render request responses by the server.
-                request_frame(connection, awaited_frames, server_prefix)
+                try:
+                    frame = frames.pop(0)
+                except IndexError:
+                    sys.exit()
+
+                request_frame(connection, frame, awaited_frames, server_prefix)
 
 
                 # Start loop to render frames.
@@ -97,7 +96,17 @@ def send_requests(server):
 
                     match response_header['type']:
                         case 'REQUEST':
-                            threading.Thread(target=request_frame, args=(connection, awaited_frames, server_prefix)).start()
+                            try:
+                                frame = frames.pop(0)
+                            except IndexError:
+                                continue
+
+
+                            awaited_frames[frame] = None    # Avoid race condition where frame arrives before next frame is requested,
+                                                            # resulting in empty awaited_frames and early exit from loop.
+
+                            threading.Thread(target=request_frame, args=(connection, frame, awaited_frames, server_prefix)).start()
+
                         case 'FRAME':
                             frame = response_header['frame_number']
                             image_data = receive_bytes(connection, response_header['frame_size'], server_prefix)
@@ -369,9 +378,6 @@ match args.command:
             os.chdir(args.output_dir)
         except NotADirectoryError:
             sys.exit(f"'{args.output_dir}' is not a directory, exiting.")
-
-
-        servers = servers[:frames_count]    # Truncate servers in case there are fewer frames than servers.
 
 
 # Create threads that send requests to the servers.

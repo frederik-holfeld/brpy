@@ -5,22 +5,23 @@ import subprocess
 import sys
 import threading
 
-from brpy_lib import receive_bytes, OkayResponse, FailResponse, RenderRequestResponse, RenderFrameResponse
+from brpy_lib import receive_bytes, OkayResponse, FailResponse, RenderRequestResponse, RenderFrameResponse, LocalRenderRequest
 
 
-def render_frame(connection, session, request_header, send_lock):
+def render_frame(connection, session, request_header, blender, send_lock):
     frame = request_header['frames']
 
 
-    args = [blender, '-b', f"{work_dir}/{session}.blend", '-o', session]
-    try:
-        args += '-F', request_header['render_format']
-    except KeyError:
-        pass
-    args += '-x', '1', '-f', str(frame), *options
+    # Send render request to locally running render script using bpy.
+    request_header = json.dumps(LocalRenderRequest(session, frame).__dict__).encode()
+    blender.sendall(len(request_header).to_bytes(8))
+    blender.sendall(request_header)
 
 
-    subprocess.run(args)
+    response_header_size = int.from_bytes(receive_bytes(blender, 8))
+    response_header = json.loads(receive_bytes(blender, response_header_size))
+
+    image = response_header['image_name']
 
 
     with send_lock:
@@ -28,15 +29,6 @@ def render_frame(connection, session, request_header, send_lock):
         connection.sendall(len(response_header).to_bytes(8))
         connection.sendall(response_header)
 
-
-    # The working directory is assumed to be empty when starting the server.
-    # Therefore the correct file should always be found,
-    # unless when rendering the same session multiple times with different render formats concurrently,
-    # which isn't guaranteed to work at the moment.
-    with os.scandir() as files:
-        for file in files:
-            if file.name.startswith(f"{session}{frame:04d}.") and file.name != f"{session}.blend":
-                image = file
 
     try:
         with open(image, 'rb') as file:
@@ -52,7 +44,7 @@ def render_frame(connection, session, request_header, send_lock):
         RenderFrameResponse(
             len(image_data),
             frame,
-            image.name.split('.')[-1]
+            image.split('.')[-1]
         ).__dict__
     ).encode()
     response = image_data
@@ -73,6 +65,10 @@ def handle_requests(connection):
 
     # As multiple threads may try to send data to a client simultaneously, that needs to be guarded by a lock.
     send_lock = threading.Lock()
+
+
+    startup = True
+    blender_socket = None
 
 
     with connection:
@@ -100,7 +96,28 @@ def handle_requests(connection):
                     response_header = json.dumps(OkayResponse().__dict__).encode()
 
                 case 'RENDER':
-                    threading.Thread(target=render_frame, args=(connection, session, request_header, send_lock)).start()
+                    if startup:
+                        blender_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        blender_port = port + 1
+
+
+                        while True:
+                            try:
+                                blender_socket.bind(('', blender_port))
+                                break
+                            except OSError:
+                                blender_port = (blender_port + 1) % 65536
+
+                        subprocess.Popen((blender, '-b', '-P', f"{os.path.dirname(__file__)}/brpy_render.py", '--', str(blender_port), session))
+
+                        blender_socket.listen()
+                        blender_socket, address = blender_socket.accept()
+
+
+                        startup = False
+
+
+                    threading.Thread(target=render_frame, args=(connection, session, request_header, blender_socket, send_lock)).start()
                     continue
 
                 case 'DELETE':

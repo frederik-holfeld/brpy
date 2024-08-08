@@ -67,3 +67,13 @@ class RenderFrameResponse(RenderResponse):
         self.frame_size = frame_size
         self.frame_number = frame_number
         self.file_extension = file_extension
+
+
+class LocalRenderRequest:
+    def __init__(self, session, frame):
+        self.session = session
+        self.frame = frame
+
+class LocalRenderResponse:
+    def __init__(self, image_name):
+        self.image_name = image_name
