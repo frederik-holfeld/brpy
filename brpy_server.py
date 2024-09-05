@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import socket
@@ -98,7 +99,7 @@ def handle_requests(connection):
                 case 'RENDER':
                     if startup:
                         blender_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        blender_port = port + 1
+                        blender_port = args.port + 1
 
 
                         while True:
@@ -135,60 +136,74 @@ def handle_requests(connection):
             connection.sendall(response)
 
 
-# Start of program.
-if len(sys.argv) < 4:
-    sys.exit("Valid arguments: working-directory Blender-executable port (Blender-options)\nToo few arguments, exiting.")
-
+# Start of server program.
 
 # Start of argument parsing.
-work_dir = os.path.abspath(sys.argv[1])
+parser = argparse.ArgumentParser(
+    description="Run a server implementing the Blender Render Protocol (BRP).",
+    formatter_class=argparse.RawTextHelpFormatter
+)
 
 
-if not os.path.exists(sys.argv[2]):
-    sys.exit(f"'{sys.argv[2]}' does not exist, exiting.")
-elif not os.path.isfile(sys.argv[2]):
-    sys.exit(f"'{sys.argv[2]}' is not a file, exiting.")
-elif not os.access(sys.argv[2], os.X_OK):
-    sys.exit(f"No permission to execute '{sys.argv[2]}', exiting.")
+parser.add_argument(
+    'work_dir',
+    metavar='working-directory',
+    help="the working directory where .blend files and rendered images are stored\n\n"
+)
+
+parser.add_argument(
+    'blender',
+    help="""path to the Blender executable used for rendering
+
+ensure that the appropriate rendering device(s) for Cycles is/are selected in the settings\n\n"""
+)
+
+
+parser.add_argument(
+    '-p', '--port',
+    metavar='port',
+    type=int,
+    default='21816',
+    help="the port to listen on for incomming connections\n\n"
+)
+
+
+args = parser.parse_args()
+
+
+if not os.path.exists(args.blender):
+    sys.exit(f"'{args.blender}' does not exist, exiting.")
+elif not os.path.isfile(args.blender):
+    sys.exit(f"'{args.blender}' is not a file, exiting.")
+elif not os.access(args.blender, os.X_OK):
+    sys.exit(f"No permission to execute '{args.blender}', exiting.")
 else:
-    blender = os.path.abspath(sys.argv[2])
+    blender = os.path.abspath(args.blender)
 
 
-try:
-    port = int(sys.argv[3])
-except ValueError:
-    sys.exit(f"'{sys.argv[3]}' is not a number, exiting.")
-if port < 0 or port > 65535:
+if args.port < 0 or args.port > 65535:
     sys.exit(f"Port {port} is not within the range of 0 to 65535, exiting.")
-
-
-# Appended at the end when running Blender. This argument is optional.
-# Probably the most interesting usecase for this is setting the Cycles rendering device with "-- --cycles-device ...".
-try:
-    options = sys.argv[4].split()
-except IndexError:
-    options = ''
 
 
 # Change working directory last, so previous arguments are read from where the command was executed.
 try:
-    os.chdir(work_dir)
+    os.chdir(args.work_dir)
 except FileNotFoundError:
-    os.makedirs(work_dir)
-    print(f"Created working directory '{work_dir}'.")
-    os.chdir(work_dir)
+    os.makedirs(args.work_dir)
+    print(f"Created working directory '{args.work_dir}'.")
+    os.chdir(args.work_dir)
 except NotADirectoryError:
-    sys.exit(f"'{work_dir}' is not a directory, exiting.")
+    sys.exit(f"'{args.work_dir}' is not a directory, exiting.")
 
 
 # Main thread starts to listen for connections.
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
     try:
-        server.bind(('', port))
+        server.bind(('', args.port))
     except PermissionError:
-        sys.exit(f"No permission to bind to port {port}, exiting.")
+        sys.exit(f"No permission to bind to port {args.port}, exiting.")
     server.listen()
-    print(f"Listening on port {port} for incoming requests.")
+    print(f"Listening on port {args.port} for incoming requests.")
 
 
     # Keep listening for incoming connections and offload their requests to new threads.
