@@ -20,9 +20,20 @@ def receive_bytes(connection, size, prefix=''):
                 return buffer
 
 
+class Child:
+    def __init__(self, address):
+        self.address = address
+        self.connections = {}
+
+
 class Request:
     def __init__(self, type):
         self.type = type
+
+class ServeRequest(Request):
+    def __init__(self, port):
+        super().__init__('SERVE')
+        self.port = port
 
 class SessionRequest(Request):
     def __init__(self, type, session):

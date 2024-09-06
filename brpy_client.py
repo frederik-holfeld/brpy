@@ -9,20 +9,24 @@ import time
 from brpy_lib import receive_bytes, SessionRequest, RenderRequest, UploadRequest
 
 
-def request_frame(connection, frame, awaited_frames, server_prefix):
-    print(f"{server_prefix} Sending request to render frame {frame}.")
-    request_header = json.dumps(RenderRequest(args.session, frame, args.render_format).__dict__).encode()
+def request_frame(connection, frames, awaited_frames, send_lock, server_prefix):
+    print(f"{server_prefix} Sending request to render frame {frames}.")
+    request_header = json.dumps(RenderRequest(args.session, frames, args.render_format).__dict__).encode()
 
     render_start = time.time()
-    connection.sendall(len(request_header).to_bytes(8))
-    connection.sendall(request_header)
+    with send_lock:
+        connection.sendall(len(request_header).to_bytes(8))
+        connection.sendall(request_header)
 
-
-    awaited_frames[frame] = render_start
+    for frame in frames:
+        awaited_frames[frame] = render_start
 
 
 def send_requests(server):
     server_prefix = f"[{server[0]}:{server[1]}]"    # Indicates which server an output is associated with.
+
+    send_lock = threading.Lock()
+
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
 
@@ -79,12 +83,13 @@ def send_requests(server):
 
 
                 # Initial render request, causing subsequent render request responses by the server.
+                requested_frames = []
                 try:
-                    frame = frames.pop(0)
+                    requested_frames.append(frames.pop(0))
                 except IndexError:
                     sys.exit()
 
-                request_frame(connection, frame, awaited_frames, server_prefix)
+                request_frame(connection, requested_frames, awaited_frames, send_lock, server_prefix)
 
 
                 # Start loop to render frames.
@@ -96,16 +101,22 @@ def send_requests(server):
 
                     match response_header['type']:
                         case 'REQUEST':
-                            try:
-                                frame = frames.pop(0)
-                            except IndexError:
-                                continue
+                            requested_frames = []
+
+                            for frame in range(response_header['frame_count']):
+                                try:
+                                    frame = frames.pop(0)
+                                except IndexError:
+                                    break
+
+                                requested_frames.append(frame)
+
+                                awaited_frames[frame] = None    # Avoid race condition where frame arrives before next frame is requested,
+                                                                # resulting in empty awaited_frames and early exit from loop.
 
 
-                            awaited_frames[frame] = None    # Avoid race condition where frame arrives before next frame is requested,
-                                                            # resulting in empty awaited_frames and early exit from loop.
-
-                            threading.Thread(target=request_frame, args=(connection, frame, awaited_frames, server_prefix)).start()
+                            if len(requested_frames) > 0:
+                                threading.Thread(target=request_frame, args=(connection, requested_frames, awaited_frames, send_lock, server_prefix)).start()
 
                         case 'FRAME':
                             frame = response_header['frame_number']
