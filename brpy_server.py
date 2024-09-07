@@ -98,6 +98,35 @@ def handle_child_render(child_connection, render_requests, render_requests_lock,
             busy_lock.wait()
 
 
+def send_frame(connection, send_lock, image, frame, client_prefix, session):
+    try:
+        with open(image, 'rb') as file:
+            image_data = file.read()
+    except UnboundLocalError:
+        print("Could not find saved frame, something must have gone wrong with the render. Exiting.")
+        sys.exit()
+
+    os.remove(image)
+
+
+    response_header = json.dumps(
+        RenderFrameResponse(
+            len(image_data),
+            frame,
+            image.split('.')[-1]
+        ).__dict__
+    ).encode()
+    response = image_data
+
+
+    with send_lock:
+        connection.sendall(len(response_header).to_bytes(8))
+        connection.sendall(response_header)
+        connection.sendall(response)
+
+    print(f"{client_prefix} Sent frame {frame} of session '{session}'.")
+
+
 def handle_local_render(connection, render_requests, render_requests_lock, session, send_lock, client_prefix):
     blender_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     blender_port = args.port + 1
@@ -149,32 +178,7 @@ def handle_local_render(connection, render_requests, render_requests_lock, sessi
             connection.sendall(response_header)
 
 
-        try:
-            with open(image, 'rb') as file:
-                image_data = file.read()
-        except UnboundLocalError:
-            print("Could not find saved frame, something must have gone wrong with the render. Exiting.")
-            sys.exit()
-
-        os.remove(image)
-
-
-        response_header = json.dumps(
-            RenderFrameResponse(
-                len(image_data),
-                frame,
-                image.split('.')[-1]
-            ).__dict__
-        ).encode()
-        response = image_data
-
-
-        with send_lock:
-            connection.sendall(len(response_header).to_bytes(8))
-            connection.sendall(response_header)
-            connection.sendall(response)
-
-        print(f"{client_prefix} Sent frame {frame} of session '{session}'.")
+        threading.Thread(target=send_frame, args=(connection, send_lock, image, frame, client_prefix, session)).start()
 
 
 def get_child_connection(child, thread_id):
