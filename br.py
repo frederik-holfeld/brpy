@@ -9,10 +9,10 @@ connection = socket.create_connection(("localhost", args[0]))
 
 old_blend = None
 while True:
-    size = bytearray(1)
+    size = bytearray(2)
     connection.recv_into(size)
 
-    header = bytearray(int.from_bytes(size))
+    header = bytearray(int.from_bytes(size, 'little'))
     connection.recv_into(header)
 
     header = json.loads(header)
@@ -39,4 +39,27 @@ while True:
                 "image": path + bpy.context.scene.render.file_extension
             }).encode()
 
-            connection.sendall(len(response).to_bytes() + response)
+            connection.sendall(len(response).to_bytes(2, 'little') + response)
+        case "query":
+            version = bpy.app.version
+
+            cycles_preferences = bpy.context.preferences.addons['cycles'].preferences
+            compute_device_type = cycles_preferences.compute_device_type
+
+            active, inactive = [], []
+            for device in cycles_preferences.get_devices_for_type(compute_device_type):
+                if device['use'] == 1:
+                    active.append(device['name'])
+                else:
+                    inactive.append(device['name'])
+
+            response = json.dumps({
+                'version': version,
+                'compute_device_type': compute_device_type,
+                'devices': {
+                    'active': active,
+                    'inactive': inactive
+                }
+            }).encode()
+
+            connection.sendall(len(response).to_bytes(2, 'little') + response)
