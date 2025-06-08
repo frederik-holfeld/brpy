@@ -1,5 +1,6 @@
 import bpy
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -8,6 +9,8 @@ args = sys.argv[sys.argv.index("--") + 1:]
 connection = socket.create_connection(("localhost", args[0]))
 
 old_blend = None
+old_mtime = None
+
 while True:
     size = bytearray(2)
     connection.recv_into(size)
@@ -18,12 +21,16 @@ while True:
     header = json.loads(header)
     match header["type"]:
         case "render":
-            if header["blend"] != old_blend:
+            blend = header["blend"]
+            mtime = os.path.getmtime(blend)
+
+            if blend != old_blend or mtime != old_mtime:
                 bpy.ops.wm.open_mainfile(filepath=str(
-                    Path(header["blend"]).absolute()
+                    Path(blend).absolute()
                 ))
 
-                old_blend = header["blend"]
+                old_blend = blend
+                old_mtime = mtime
 
             frame = header["frame"]
             bpy.context.scene.frame_current = frame
@@ -38,8 +45,6 @@ while True:
                 "type": "okay",
                 "image": path + bpy.context.scene.render.file_extension
             }).encode()
-
-            connection.sendall(len(response).to_bytes(2, 'little') + response)
         case "query":
             version = bpy.app.version
 
@@ -62,4 +67,4 @@ while True:
                 }
             }).encode()
 
-            connection.sendall(len(response).to_bytes(2, 'little') + response)
+    connection.sendall(len(response).to_bytes(2, 'little') + response)
